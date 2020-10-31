@@ -43,6 +43,7 @@ namespace SysBot.Pokemon
                 EncounterMode.HorizontalLine => WalkInLine(token),
                 EncounterMode.Eternatus => DoEternatusEncounter(token),
                 EncounterMode.LegendaryDogs => DoDogEncounter(token),
+                EncounterMode.Regis => RegiLoop(token),
                 _ => WalkInLine(token),
             };
             await task.ConfigureAwait(false);
@@ -85,6 +86,34 @@ namespace SysBot.Pokemon
                 Log("Running away...");
                 while (await IsInBattle(token).ConfigureAwait(false))
                     await FleeToOverworld(token).ConfigureAwait(false);
+            }
+        }
+
+        private async Task RegiLoop(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var attempts = await DoRegiEncounter(token).ConfigureAwait(false);
+                if (attempts < 0) // aborted
+                    continue;
+
+                Log($"Encounter found after {attempts} attempts! Checking details...");
+                var pk = await ReadUntilPresent(WildPokemonOffset, 5_000, 0_200, token).ConfigureAwait(false);
+                if (pk == null)
+                {
+                    Log("Invalid data detected. Restarting loop.");
+                    await RestartGame(token).ConfigureAwait(false);
+                }
+
+                // Offsets are flickery so make sure we see it 3 times.
+                for (int i = 0; i < 3; i++)
+                    await ReadUntilChanged(BattleMenuOffset, BattleMenuReady, 5_000, 0_100, true, token).ConfigureAwait(false);
+
+                if (await HandleEncounter(pk, true, token).ConfigureAwait(false))
+                    return;
+
+                Log("Closing game...");
+                await RestartGame(token).ConfigureAwait(false);
             }
         }
 
@@ -156,6 +185,31 @@ namespace SysBot.Pokemon
                 // Extra delay to be sure we're fully out of the battle.
                 await Task.Delay(0_250, token).ConfigureAwait(false);
             }
+        }
+
+        private async Task<int> DoRegiEncounter(CancellationToken token)
+        {
+            Log("Spamming A until an encounter...");
+            int attempts = 0;
+            while (!token.IsCancellationRequested && Config.NextRoutineType == PokeRoutineType.EncounterBot)
+            {
+                if (!await IsInBattle(token).ConfigureAwait(false))
+                {
+                    // Press A a few times
+                    for (int i = 0; i < 6; i++)
+                        await Click(A, 0_400, token).ConfigureAwait(false);
+                    await SetStick(LEFT, 0, 0, 6_350, token).ConfigureAwait(false);
+
+                    attempts++;
+                    if (attempts % 10 == 0)
+                        Log($"Tried {attempts} times, still no encounters.");
+                }
+
+                if (await IsInBattle(token).ConfigureAwait(false))
+                    return attempts;
+            }
+
+            return -1; // aborted
         }
 
         private async Task<int> StepUntilEncounter(CancellationToken token)
@@ -243,6 +297,21 @@ namespace SysBot.Pokemon
             await Click(A, 0_400, token).ConfigureAwait(false);
             await Click(B, 0_400, token).ConfigureAwait(false);
             await Click(B, 0_400, token).ConfigureAwait(false);
+        }
+
+        private async Task RestartGame(CancellationToken token)
+        {
+            // Close out of the game
+            await Click(HOME, 0_400, token).ConfigureAwait(false);
+            await Click(X, 0_400, token).ConfigureAwait(false);
+            await Click(A, 0_400, token).ConfigureAwait(false);
+
+            // Wait for game to close > Open game > Wait for game to load > Press A on title screen > Wait for game to load
+            await SetStick(LEFT, 0, 0, 2_500, token).ConfigureAwait(false);
+            await Click(A, 0_400, token).ConfigureAwait(false);
+            await SetStick(LEFT, 0, 0, 17_500, token).ConfigureAwait(false);
+            await Click(A, 0_400, token).ConfigureAwait(false);
+            await SetStick(LEFT, 0, 0, 3_000, token).ConfigureAwait(false);
         }
     }
 }
